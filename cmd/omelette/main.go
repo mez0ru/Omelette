@@ -2,19 +2,21 @@ package main
 
 import (
 	"flag"
+	"path/filepath"
 
-    "crypto/tls"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"github.com/mez0ru/omelette/models"
-	"github.com/mez0ru/omelette/services"
 	"net/http"
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/mez0ru/omelette/models"
+	"github.com/mez0ru/omelette/services"
 
 	"github.com/TwiN/go-color"
 
@@ -48,11 +50,11 @@ type Env struct {
 		InsertStmt(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error)
 		Transaction() (*sql.Tx, error)
 		GetBookmarkMeta(ctx context.Context, id int64) (title, href string, err error)
-        Search(ctx context.Context, tokens string) ([]models.SearchResult, error)
-    }
+		Search(ctx context.Context, tokens string) ([]models.SearchResult, error)
+	}
 }
 
-    func (e *Env) importBookmarks(ctx context.Context, args []string) error {
+func (e *Env) importBookmarks(ctx context.Context, args []string) error {
 	f, err := os.Open(args[0])
 
 	if err != nil {
@@ -170,18 +172,18 @@ func ByteCountSI(b int) string {
 }
 
 type fetchFlags struct {
-    Threads int
-    Retries int
+	Threads      int
+	Retries      int
 	UncachedOnly bool
-    Timeout int
+	Timeout      int
 }
 
 func (c *fetchFlags) Flags() *flag.FlagSet {
 	fs := flag.NewFlagSet("", flag.ContinueOnError)
 	fs.BoolVar(&c.UncachedOnly, "uncached", false, "Fetch Uncached bookmarks only.")
-    fs.IntVar(&c.Threads, "threads", 6, "Specify how many concurrent connections")
-    fs.IntVar(&c.Retries, "retry", 2, "Retries if failed")
-    fs.IntVar(&c.Retries, "timeout", 10, "timeout in seconds")
+	fs.IntVar(&c.Threads, "threads", 6, "Specify how many concurrent connections")
+	fs.IntVar(&c.Retries, "retry", 2, "Retries if failed")
+	fs.IntVar(&c.Retries, "timeout", 10, "timeout in seconds")
 	return fs
 }
 
@@ -216,12 +218,12 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 		return err
 	}
 
-    customTransport := http.DefaultTransport.(*http.Transport).Clone()
-customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	customTransport := http.DefaultTransport.(*http.Transport).Clone()
+	customTransport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	client := &http.Client{
-Timeout: time.Duration(cfg.Timeout)*time.Second,
-        Transport: customTransport,
-    }
+		Timeout:   time.Duration(cfg.Timeout) * time.Second,
+		Transport: customTransport,
+	}
 
 	for _, bookmark := range bookmarks {
 
@@ -299,7 +301,7 @@ func (e *Env) compressBytes(data []byte) (bytes.Buffer, error) {
 // limit imposed to lessen the time in case a function failed to fetch from the first time
 func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context.Context,
 	stmt *sql.Stmt, client *http.Client, th models.TitleHref, disableAutomaticFree bool,
-    retry int) {
+	retry int) {
 	is_free := false
 	defer func() {
 		if !is_free || disableAutomaticFree {
@@ -356,14 +358,14 @@ func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context
 		e.log.Fatalf("%s%d. Error compressing content from \"%s\", %+v\n%s", color.Red, th.Id, th.Title, err, color.Reset)
 	}
 
-    html := string(content[:])
-    parsed, ok := services.SpecializedParser(html, th.Href)
-    if !ok {
-        parsed, err = html2text.FromString(html, html2text.Options{PrettyTables: false, TextOnly: true, OmitLinks: true})
-        if err != nil {
-            e.log.Fatalf("%s%d. Error converting website to text \"%s\", %+v\n%s", color.Red, th.Id, th.Title, err, color.Reset)
-        }
-    }
+	html := string(content[:])
+	parsed, ok := services.SpecializedParser(html, th.Href)
+	if !ok {
+		parsed, err = html2text.FromString(html, html2text.Options{PrettyTables: false, TextOnly: true, OmitLinks: true})
+		if err != nil {
+			e.log.Fatalf("%s%d. Error converting website to text \"%s\", %+v\n%s", color.Red, th.Id, th.Title, err, color.Reset)
+		}
+	}
 
 	_, err = e.bookmarks.UpdateContent(ctx, th.Id, services.StandardizeSpaces(parsed), b, xxh, modified, stmt)
 	if err != nil {
@@ -372,31 +374,45 @@ func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context
 }
 
 func (e *Env) search(ctx context.Context, args []string) error {
-    query, err := e.bookmarks.Search(ctx, strings.Join(args, " "))
-    if err != nil {
-        return err
-    }
+	query, err := e.bookmarks.Search(ctx, strings.Join(args, " "))
+	if err != nil {
+		return err
+	}
 
-    fmt.Printf("Found %s%d%s search results!\n\n", color.Yellow, len(query), color.Reset)
-    for _, q := range(query) {
-        fmt.Printf("%d. %s\n", q.Id, q.Title)
-        fmt.Printf("%s\n", q.Href)
-        fmt.Printf("\"%s\"\n\n", q.Content)
-    }
-    
-    return nil
+	fmt.Printf("Found %s%d%s search results!\n\n", color.Yellow, len(query), color.Reset)
+	for _, q := range query {
+		fmt.Printf("%d. %s\n", q.Id, q.Title)
+		fmt.Printf("%s\n", q.Href)
+		fmt.Printf("\"%s\"\n\n", q.Content)
+	}
+
+	return nil
 }
-
 
 func main() {
 	log := log.Default()
 
-	db, err := sql.Open("sqlite", "data.db")
-	// db, err := sql.Open("sqlite", ":memory:")
-	defer db.Close()
+	configDir, err := os.UserConfigDir()
 	if err != nil {
 		panic(err)
 	}
+	configDir = filepath.Join(configDir, "omelette")
+
+	_, err = os.Stat(configDir)
+	if os.IsNotExist(err) {
+		err = os.Mkdir(configDir, 0700)
+		if err != nil {
+			panic(err)
+		}
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(configDir, "data.db"))
+	// db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		panic(err)
+	}
+
+	defer db.Close()
 
 	e := &Env{
 		bookmarks: models.BookmarkModel{DB: db},
@@ -425,7 +441,7 @@ func main() {
 		AppName:        "Omelette",
 		AppDescription: "Bookmark manager",
 		Version:        "0.1.0",
-        // For testing purposes:
+		// For testing purposes:
 		// Args:           []string{"omelette", "fetch"},
 		// Args: []string{"omelette", "fetch", "-uncached"},
 		// Args: []string{"omelette", "search", "subs"},
