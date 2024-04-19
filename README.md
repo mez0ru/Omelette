@@ -3,7 +3,7 @@
 
 ## Installation
 ```
-go install github.com/mez0ru/omelette@main
+go install github.com/mez0ru/omelette/cmd/omelette@main
 ```
 
 ## Usage
