@@ -28,6 +28,21 @@ Version: 0.1.0
 2024/04/19 09:37:41 finished task in 0.001040 seconds!
 ```
 
+## Querying results
+It uses fts5 as its search driver, so you are basically bound by fts5's rules.
+From what I know, if you need to search sentences or special characters,
+you have to enclose your query with double quotes.
+#### Powershell
+```
+> omelette search '\"this is an example\"'
+```
+#### CMD
+```
+> omelette search \"this is an example\"'
+```
+In Linux, I would assume it's something close, but you get the idea.
+Read the [Sqlite FTS5 Manual](https://www.sqlite.org/fts5.html) for more information.
+
 ## Goals
 The idea behind the app is to store your bookmarks, and after fetching the content,
 you could fuzzy find your bookmarks using their url, title, and content.
