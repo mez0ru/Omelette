@@ -40,7 +40,7 @@ you have to enclose your query with double quotes.
 ```
 > omelette search \"this is an example\"'
 ```
-In Linux, I would assume it's something close, but you get the idea.
+On Linux, I would assume it's something close, but you get the idea.
 Read the [Sqlite FTS5 Manual](https://www.sqlite.org/fts5.html) for more information.
 
 ## Goals
