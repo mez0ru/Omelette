@@ -183,7 +183,7 @@ func (c *fetchFlags) Flags() *flag.FlagSet {
 	fs.BoolVar(&c.UncachedOnly, "uncached", false, "Fetch Uncached bookmarks only.")
 	fs.IntVar(&c.Threads, "threads", 6, "Specify how many concurrent connections")
 	fs.IntVar(&c.Retries, "retry", 2, "Retries if failed")
-	fs.IntVar(&c.Retries, "timeout", 10, "timeout in seconds")
+	fs.IntVar(&c.Timeout, "timeout", 10, "timeout in seconds")
 	return fs
 }
 
