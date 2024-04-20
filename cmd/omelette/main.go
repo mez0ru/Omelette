@@ -30,8 +30,6 @@ import (
 
 	"github.com/cespare/xxhash"
 
-	"bytes"
-	"compress/gzip"
 	"encoding/base64"
 	"time"
 
@@ -41,16 +39,15 @@ import (
 type Env struct {
 	log       *log.Logger
 	bookmarks interface {
-		All(ctx context.Context) ([]models.TitleHref, error)
-		AllUncached(ctx context.Context) ([]models.TitleHref, error)
-		UpdateContentStmt(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error)
-		UpdateContent(ctx context.Context, id int64, content string, compressed bytes.Buffer, xxh uint64, modified time.Time, stmt *sql.Stmt) (int64, error)
-		Init(ctx context.Context) error
-		Insert(ctx context.Context, entry models.Entry, stmt *sql.Stmt) (int64, error)
-		InsertStmt(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error)
+		All(ctx *context.Context) ([]models.TitleHref, error)
+		AllUncached(ctx *context.Context) ([]models.TitleHref, error)
+		UpdateContentStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, error)
+		UpdateContent(ctx *context.Context, id int64, content string, xxh uint64, modified time.Time, stmt *sql.Stmt) (int64, error)
+		Init(ctx *context.Context) error
+		Insert(ctx *context.Context, entry models.Entry, stmt *sql.Stmt) (int64, error)
+		InsertStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, error)
 		Transaction() (*sql.Tx, error)
-		GetBookmarkMeta(ctx context.Context, id int64) (title, href string, err error)
-		Search(ctx context.Context, tokens string) ([]models.SearchResult, error)
+		Search(ctx *context.Context, tokens string) ([]models.SearchResult, error)
 	}
 }
 
@@ -70,13 +67,13 @@ func (e *Env) importBookmarks(ctx context.Context, args []string) error {
 		return errors.New("Bookmark file is not a valid netscape bookmark html file.")
 	}
 
-	err = e.bookmarks.Init(ctx)
+	err = e.bookmarks.Init(&ctx)
 	if err != nil {
 		return err
 	}
 
 	tx, err := e.bookmarks.Transaction()
-	stmt, err := e.bookmarks.InsertStmt(ctx, tx)
+	stmt, err := e.bookmarks.InsertStmt(&ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -121,7 +118,7 @@ func (e *Env) importBookmarks(ctx context.Context, args []string) error {
 		if savedAnchor != nil {
 			if n.Type == html.TextNode {
 				entry.Title = n.Data
-				_, err = e.bookmarks.Insert(ctx, entry, stmt)
+				_, err = e.bookmarks.Insert(&ctx, entry, stmt)
 
 				if sqlerror, ok := err.(*sqlite.Error); ok {
 					if sqlerror.Code() != 2067 {
@@ -176,6 +173,7 @@ type fetchFlags struct {
 	Retries      int
 	UncachedOnly bool
 	Timeout      int
+	Overwrite    bool
 }
 
 func (c *fetchFlags) Flags() *flag.FlagSet {
@@ -184,6 +182,7 @@ func (c *fetchFlags) Flags() *flag.FlagSet {
 	fs.IntVar(&c.Threads, "threads", 6, "Specify how many concurrent connections")
 	fs.IntVar(&c.Retries, "retry", 2, "Retries if failed")
 	fs.IntVar(&c.Timeout, "timeout", 10, "timeout in seconds")
+    fs.BoolVar(&c.Overwrite, "overwrite", false, "Overwrite identical cached version of the website")
 	return fs
 }
 
@@ -196,9 +195,9 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 
 	var bookmarks []models.TitleHref
 	if cfg.UncachedOnly {
-		bookmarks, err = e.bookmarks.AllUncached(ctx)
+		bookmarks, err = e.bookmarks.AllUncached(&ctx)
 	} else {
-		bookmarks, err = e.bookmarks.All(ctx)
+		bookmarks, err = e.bookmarks.All(&ctx)
 	}
 
 	if err != nil {
@@ -213,7 +212,7 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 		return err
 	}
 
-	stmt, err := e.bookmarks.UpdateContentStmt(ctx, tx)
+	stmt, err := e.bookmarks.UpdateContentStmt(&ctx, tx)
 	if err != nil {
 		return err
 	}
@@ -230,7 +229,11 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 		guard <- struct{}{} // would block if guard channel is already filled
 		wg.Add(1)
 
-		go e.processWebsite(&wg, guard, ctx, stmt, client, bookmark, cfg.UncachedOnly, cfg.Retries-1)
+        if cfg.Overwrite || bookmark.Outdated {
+            bookmark.Xxh = 0
+            bookmark.LastModified = time.Time{}
+        }
+		go e.processWebsite(&wg, guard, &ctx, stmt, client, &bookmark, cfg.UncachedOnly, cfg.Retries-1)
 	}
 
 	wg.Wait()
@@ -284,23 +287,10 @@ func (e *Env) fetchWebsite(client *http.Client, href string, if_modified_since t
 	return body, modified, nil
 }
 
-func (e *Env) compressBytes(data []byte) (bytes.Buffer, error) {
-	var b bytes.Buffer
-	reader := bytes.NewReader(data)
-	w, err := gzip.NewWriterLevel(&b, gzip.BestCompression)
-	if err != nil {
-		return b, err
-	}
-
-	io.Copy(w, reader)
-	w.Close()
-	return b, nil
-}
-
 // Automatic free is about setting the goroutine free from the thread
 // limit imposed to lessen the time in case a function failed to fetch from the first time
-func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context.Context,
-	stmt *sql.Stmt, client *http.Client, th models.TitleHref, disableAutomaticFree bool,
+func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx *context.Context,
+	stmt *sql.Stmt, client *http.Client, th *models.TitleHref, disableAutomaticFree bool,
 	retry int) {
 	is_free := false
 	defer func() {
@@ -353,11 +343,6 @@ func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context
 		return
 	}
 
-	b, err := e.compressBytes(content)
-	if err != nil {
-		e.log.Fatalf("%s%d. Error compressing content from \"%s\", %+v\n%s", color.Red, th.Id, th.Title, err, color.Reset)
-	}
-
 	html := string(content[:])
 	parsed, ok := services.SpecializedParser(html, th.Href)
 	if !ok {
@@ -367,14 +352,14 @@ func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx context
 		}
 	}
 
-	_, err = e.bookmarks.UpdateContent(ctx, th.Id, services.StandardizeSpaces(parsed), b, xxh, modified, stmt)
+	_, err = e.bookmarks.UpdateContent(ctx, th.Id, services.StandardizeSpaces(parsed), xxh, modified, stmt)
 	if err != nil {
 		e.log.Fatalf("%d. Error inserting \"%s\", %+v\n", th.Id, th.Title, err)
 	}
 }
 
 func (e *Env) search(ctx context.Context, args []string) error {
-	query, err := e.bookmarks.Search(ctx, strings.Join(args, " "))
+	query, err := e.bookmarks.Search(&ctx, strings.Join(args, " "))
 	if err != nil {
 		return err
 	}

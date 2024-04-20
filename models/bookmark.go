@@ -3,11 +3,13 @@ package models
 import (
 	"github.com/TwiN/go-color"
 
-	"bytes"
 	"context"
 	"database/sql"
 	"time"
 )
+
+// Schema versioning is good in case there's a better algorithm for x website. like reddit
+const SCHEMA_VER = 0
 
 type Bookmark struct {
 }
@@ -30,6 +32,7 @@ type TitleHref struct {
     Title string
     Xxh int64
     LastModified time.Time
+    Outdated bool
 }
 
 type SearchResult struct {
@@ -39,8 +42,8 @@ type SearchResult struct {
     Content string
 }
 
-func (m BookmarkModel) Insert(ctx context.Context, entry Entry, stmt *sql.Stmt) (int64, error) {
-	r, err := stmt.ExecContext(ctx, &entry.Title, &entry.Href, &entry.Date, &entry.Icon, &entry.Content)
+func (m BookmarkModel) Insert(ctx *context.Context, entry Entry, stmt *sql.Stmt) (int64, error) {
+	r, err := stmt.ExecContext(*ctx, &entry.Title, &entry.Href, &entry.Date, &entry.Icon, &entry.Content, SCHEMA_VER)
 
 	if err != nil {
 		return -1, err
@@ -48,17 +51,17 @@ func (m BookmarkModel) Insert(ctx context.Context, entry Entry, stmt *sql.Stmt) 
 return r.LastInsertId()
 }
 
-func (m BookmarkModel) InsertStmt(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {
-	return tx.PrepareContext(ctx, `
+func (m BookmarkModel) InsertStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, error) {
+	return tx.PrepareContext(*ctx, `
         insert into bookmark
-        (title, href, date, icon, content)
+        (title, href, date, icon, content, version)
         values
-        (?, ?, (select datetime(?, 'unixepoch')), ?, ?);
+        (?, ?, (select datetime(?, 'unixepoch')), ?, ?, ?);
         `)
 }
 
-func (m BookmarkModel) UpdateContent(ctx context.Context, id int64, content string, compressed bytes.Buffer, xxh uint64, modified time.Time, stmt *sql.Stmt) (int64, error) {
-	r, err := stmt.ExecContext(ctx, content, compressed.Bytes(), int64(xxh), modified.Unix(), id)
+func (m BookmarkModel) UpdateContent(ctx *context.Context, id int64, content string, xxh uint64, modified time.Time, stmt *sql.Stmt) (int64, error) {
+	r, err := stmt.ExecContext(*ctx, content, int64(xxh), modified.Unix(), id)
 
 	if err != nil {
 		return -1, err
@@ -66,16 +69,16 @@ func (m BookmarkModel) UpdateContent(ctx context.Context, id int64, content stri
 return r.LastInsertId()
 }
 
-func (m BookmarkModel) UpdateContentStmt(ctx context.Context, tx *sql.Tx) (*sql.Stmt, error) {
-	return tx.PrepareContext(ctx, `
+func (m BookmarkModel) UpdateContentStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, error) {
+	return tx.PrepareContext(*ctx, `
         update bookmark set
-        content = ?, source = ?, xxh = ?, modified = datetime(?, 'unixepoch')
+        content = ?, xxh = ?, modified = datetime(?, 'unixepoch')
         where id = ?;
         `)
 }
 
-func (m BookmarkModel) Init(ctx context.Context) error {
-	_, err := m.DB.ExecContext(ctx, `
+func (m BookmarkModel) Init(ctx *context.Context) error {
+	_, err := m.DB.ExecContext(*ctx, `
         create table if not exists bookmark(
             id integer not null primary key,
             title text,
@@ -83,9 +86,9 @@ func (m BookmarkModel) Init(ctx context.Context) error {
             date timestamp not null,
             icon blob,
             content text,
-            source blob,
             xxh integer not null default 0,
             modified timestamp not null default (datetime(0, 'unixepoch')),
+            version integer not null default ?
             created_at timestamp not null default current_timestamp,
             updated_at timestamp not null default current_timestamp
         );
@@ -121,7 +124,7 @@ func (m BookmarkModel) Init(ctx context.Context) error {
             update bookmark set updated_at=current_timestamp
             where id=new.id;
         end;
-        `)
+        `, SCHEMA_VER)
 
 	return err
 }
@@ -130,23 +133,8 @@ func (m BookmarkModel) Transaction() (*sql.Tx, error) {
     return m.DB.Begin()
 }
 
-func (m BookmarkModel) GetBookmarkMeta(ctx context.Context, id int64) (title, href string, err error) {
-    res := m.DB.QueryRowContext(ctx, `
-        select title, href
-        from bookmark
-        where id = ?;
-`, id)
-
-    err = res.Scan(&title, &href)
-    if err != nil {
-        return "", "", err
-    }
-
-    return title, href, err
-}
-
-func (m BookmarkModel) Search(ctx context.Context, tokens string) ([]SearchResult, error) {
-    rows, err := m.DB.QueryContext(ctx, `
+func (m BookmarkModel) Search(ctx *context.Context, tokens string) ([]SearchResult, error) {
+    rows, err := m.DB.QueryContext(*ctx, `
         SELECT rowid, title, href,
         snippet(bookmark_fts, 2, ?, ?, '...', 64)
         FROM bookmark_fts(?) ORDER BY rank;
@@ -176,9 +164,9 @@ func (m BookmarkModel) Search(ctx context.Context, tokens string) ([]SearchResul
 	return ss, nil
 }
 
-func (m BookmarkModel) AllUncached(ctx context.Context) ([]TitleHref, error) {
-	rows, err := m.DB.QueryContext(ctx, `SELECT id, title, href, xxh, modified
-        FROM bookmark where source is null order by RANDOM()`)
+func (m BookmarkModel) AllUncached(ctx *context.Context) ([]TitleHref, error) {
+	rows, err := m.DB.QueryContext(*ctx, `SELECT id, title, href, xxh, modified, version
+        FROM bookmark where is null order by RANDOM()`)
 	if err != nil {
 		return nil, err
 	}
@@ -187,12 +175,17 @@ func (m BookmarkModel) AllUncached(ctx context.Context) ([]TitleHref, error) {
     var b []TitleHref
 
 	for rows.Next() {
-        var t TitleHref
+        t := TitleHref{ Outdated: false }
+        var ver int
 
-		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified)
+		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified, &ver)
 		if err != nil {
 			return nil, err
 		}
+
+        if SCHEMA_VER > ver {
+            t.Outdated = true
+        }
 
 		b = append(b, t)
 	}
@@ -203,8 +196,8 @@ func (m BookmarkModel) AllUncached(ctx context.Context) ([]TitleHref, error) {
 	return b, nil
 }
 
-func (m BookmarkModel) All(ctx context.Context) ([]TitleHref, error) {
-	rows, err := m.DB.QueryContext(ctx, "SELECT id, title, href, xxh, modified FROM bookmark order by RANDOM()")
+func (m BookmarkModel) All(ctx *context.Context) ([]TitleHref, error) {
+	rows, err := m.DB.QueryContext(*ctx, "SELECT id, title, href, xxh, modified FROM bookmark order by RANDOM()")
 	if err != nil {
 		return nil, err
 	}
