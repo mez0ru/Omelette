@@ -9,7 +9,7 @@ import (
 )
 
 // Schema versioning is good in case there's a better algorithm for x website. like reddit
-const SCHEMA_VER = 0
+const SCHEMA_VER = 1
 
 type Bookmark struct {
 }
@@ -32,7 +32,7 @@ type TitleHref struct {
     Title string
     Xxh int64
     LastModified time.Time
-    Outdated bool
+    Version int
 }
 
 type SearchResult struct {
@@ -175,17 +175,12 @@ func (m BookmarkModel) AllUncached(ctx *context.Context) ([]TitleHref, error) {
     var b []TitleHref
 
 	for rows.Next() {
-        t := TitleHref{ Outdated: false }
-        var ver int
+        t := TitleHref{}
 
-		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified, &ver)
+		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified, &t.Version)
 		if err != nil {
 			return nil, err
 		}
-
-        if SCHEMA_VER > ver {
-            t.Outdated = true
-        }
 
 		b = append(b, t)
 	}
@@ -197,7 +192,7 @@ func (m BookmarkModel) AllUncached(ctx *context.Context) ([]TitleHref, error) {
 }
 
 func (m BookmarkModel) All(ctx *context.Context) ([]TitleHref, error) {
-	rows, err := m.DB.QueryContext(*ctx, "SELECT id, title, href, xxh, modified FROM bookmark order by RANDOM()")
+	rows, err := m.DB.QueryContext(*ctx, "SELECT id, title, href, xxh, modified, version FROM bookmark order by RANDOM()")
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +203,7 @@ func (m BookmarkModel) All(ctx *context.Context) ([]TitleHref, error) {
 	for rows.Next() {
         var t TitleHref
 
-		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified)
+		err := rows.Scan(&t.Id, &t.Title, &t.Href, &t.Xxh, &t.LastModified, &t.Version)
 		if err != nil {
 			return nil, err
 		}

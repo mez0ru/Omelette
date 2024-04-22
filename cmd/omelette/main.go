@@ -154,19 +154,6 @@ func (e *Env) importBookmarks(ctx context.Context, args []string) error {
 
 	return nil
 }
-func ByteCountSI(b int) string {
-	const unit = 1000
-	if b < unit {
-		return fmt.Sprintf("%d B", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.2f %cB",
-		float64(b)/float64(div), "kMGTPE"[exp])
-}
 
 type fetchFlags struct {
 	Threads      int
@@ -174,6 +161,7 @@ type fetchFlags struct {
 	UncachedOnly bool
 	Timeout      int
 	Overwrite    bool
+    Outdated bool
 }
 
 func (c *fetchFlags) Flags() *flag.FlagSet {
@@ -183,6 +171,7 @@ func (c *fetchFlags) Flags() *flag.FlagSet {
 	fs.IntVar(&c.Retries, "retry", 2, "Retries if failed")
 	fs.IntVar(&c.Timeout, "timeout", 10, "timeout in seconds")
     fs.BoolVar(&c.Overwrite, "overwrite", false, "Overwrite identical cached version of the website")
+    fs.BoolVar(&c.Outdated, "outdated", true, "Overwrite outdated implementations of these websites only")
 	return fs
 }
 
@@ -225,11 +214,13 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 	}
 
 	for _, bookmark := range bookmarks {
-
+        if cfg.Outdated && !services.IsOutdated(bookmark.Href, bookmark.Version) {
+            continue
+        }
 		guard <- struct{}{} // would block if guard channel is already filled
 		wg.Add(1)
 
-        if cfg.Overwrite || bookmark.Outdated {
+        if cfg.Overwrite || cfg.Outdated {
             bookmark.Xxh = 0
             bookmark.LastModified = time.Time{}
         }
@@ -247,12 +238,14 @@ func (e *Env) fetch(ctx context.Context, args []string) error {
 }
 
 func (e *Env) fetchWebsite(client *http.Client, href string, if_modified_since time.Time) ([]byte, time.Time, error) {
+    href = services.SpecializedWebsite(href)
 	req, err := http.NewRequest("GET", href, nil)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
+    services.SpecializedHeaders(req)
 	if !if_modified_since.IsZero() {
 		req.Header.Set("If-Modified-Since", if_modified_since.Format(time.RFC1123))
 	}
@@ -314,7 +307,7 @@ func (e *Env) processWebsite(wg *sync.WaitGroup, ch <-chan struct{}, ctx *contex
 			<-ch
 		}
 
-		content, modified, err = e.fetchWebsite(client, services.SpecializedWebsite(th.Href), th.LastModified)
+		content, modified, err = e.fetchWebsite(client, th.Href, th.LastModified)
 		if err != nil {
 			if strings.Contains(err.Error(), "forcibly closed") {
 				e.log.Printf("%s%d. Possibly blocked by a firewall? \"%s\", %+v\n%s", color.Yellow, th.Id, th.Title, err, color.Reset)

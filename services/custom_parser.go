@@ -1,12 +1,15 @@
 package services
 
 import (
+	"net/http"
 	"regexp"
 	"strings"
 )
 
 var youtubeRe = regexp.MustCompile(`^https:\/\/(?:www\.)?(youtube\.com\/watch\?v\=|youtu\.be\/)`)
 var redditRe = regexp.MustCompile(`^https://(?:.*\.)?reddit.com/r/.*\/comments\/`)
+
+const redditVer = 1
         var youtubeDescription = regexp.MustCompile(`(?:"shortDescription":")(.*)","isCrawlable"`)
 var redditBodies = regexp.MustCompile(`(?:"body": ")(.*?)", "edited"`)
 
@@ -15,6 +18,20 @@ func StandardizeSpaces(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
+func IsOutdated(href string, oldVer int) bool {
+    if oldVer < redditVer && redditRe.MatchString(href) {
+        return true
+    }
+
+    return false
+}
+
+func SpecializedHeaders(r *http.Request) {
+    // Hello, your Id please? No thanks reddit, fuck off.
+    if redditRe.MatchString(r.RequestURI) {
+        r.Header.Add("Cookie", "reddit_session=whatever")
+    }
+}
 func SpecializedWebsite(href string) string {
     if redditRe.MatchString(href) {
         return href+"/.json"
