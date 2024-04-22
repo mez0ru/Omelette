@@ -245,7 +245,7 @@ func (e *Env) fetchWebsite(client *http.Client, href string, if_modified_since t
 	}
 
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
-    services.SpecializedHeaders(req)
+    services.SpecializedHeaders(href, req)
 	if !if_modified_since.IsZero() {
 		req.Header.Set("If-Modified-Since", if_modified_since.Format(time.RFC1123))
 	}

@@ -9,7 +9,7 @@ import (
 )
 
 // Schema versioning is good in case there's a better algorithm for x website. like reddit
-const SCHEMA_VER = 1
+const SCHEMA_VER = 2
 
 type Bookmark struct {
 }
@@ -61,7 +61,7 @@ func (m BookmarkModel) InsertStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, 
 }
 
 func (m BookmarkModel) UpdateContent(ctx *context.Context, id int64, content string, xxh uint64, modified time.Time, stmt *sql.Stmt) (int64, error) {
-	r, err := stmt.ExecContext(*ctx, content, int64(xxh), modified.Unix(), id)
+	r, err := stmt.ExecContext(*ctx, content, int64(xxh), modified.Unix(), SCHEMA_VER, id)
 
 	if err != nil {
 		return -1, err
@@ -72,7 +72,7 @@ return r.LastInsertId()
 func (m BookmarkModel) UpdateContentStmt(ctx *context.Context, tx *sql.Tx) (*sql.Stmt, error) {
 	return tx.PrepareContext(*ctx, `
         update bookmark set
-        content = ?, xxh = ?, modified = datetime(?, 'unixepoch')
+        content = ?, xxh = ?, modified = datetime(?, 'unixepoch'), version = ?
         where id = ?;
         `)
 }

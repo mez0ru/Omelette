@@ -7,11 +7,12 @@ import (
 )
 
 var youtubeRe = regexp.MustCompile(`^https:\/\/(?:www\.)?(youtube\.com\/watch\?v\=|youtu\.be\/)`)
+const youtubeVer = 0
 var redditRe = regexp.MustCompile(`^https://(?:.*\.)?reddit.com/r/.*\/comments\/`)
 
-const redditVer = 1
+const redditVer = 2
         var youtubeDescription = regexp.MustCompile(`(?:"shortDescription":")(.*)","isCrawlable"`)
-var redditBodies = regexp.MustCompile(`(?:"body": ")(.*?)", "edited"`)
+var redditBodies = regexp.MustCompile(`(?:"body": ")(.*?)", "`)
 
 // https://stackoverflow.com/a/42251527/3436434
 func StandardizeSpaces(s string) string {
@@ -22,13 +23,16 @@ func IsOutdated(href string, oldVer int) bool {
     if oldVer < redditVer && redditRe.MatchString(href) {
         return true
     }
+    if oldVer < youtubeVer && youtubeRe.MatchString(href) {
+        return true
+    }
 
     return false
 }
 
-func SpecializedHeaders(r *http.Request) {
+func SpecializedHeaders(href string, r *http.Request) {
     // Hello, your Id please? No thanks reddit, fuck off.
-    if redditRe.MatchString(r.RequestURI) {
+    if redditRe.MatchString(href) {
         r.Header.Add("Cookie", "reddit_session=whatever")
     }
 }
@@ -55,7 +59,11 @@ func SpecializedParser(html string, href string) (string, bool) {
         all := ""
         for _, body := range(bodies) {
             if len(body) > 1 && body[1] != "[deleted]" {
-                all += body[1]
+                if all != "" {
+                all += " " + body[1]
+                } else {
+                    all += body[1]
+                }
             }
         }
 
